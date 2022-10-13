@@ -16,7 +16,24 @@ from sklearn.metrics import accuracy_score, confusion_matrix, classification_rep
 
 from art.attacks.evasion import FastGradientMethod
 from art.attacks.evasion import SaliencyMapMethod
+
+from art.estimators.classification import KerasClassifier
 from art.estimators.classification import SklearnClassifier
+from art.estimators.classification import EnsembleClassifier
+
+
+import tensorflow as tf
+from tensorflow import keras
+tf.compat.v1.disable_eager_execution()
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Flatten, Conv2D, MaxPooling2D, Activation
+from tensorflow.keras.losses import categorical_crossentropy
+from tensorflow.keras.losses import sparse_categorical_crossentropy
+from tensorflow.keras.losses import binary_crossentropy
+from tensorflow.keras.utils import to_categorical
+
+from tensorflow.keras.optimizers import Adam
+
 
 from dictdiffer import diff
 from sklearn.ensemble import RandomForestClassifier
@@ -65,8 +82,76 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
         orig_acc = accuracy_score(y_test, y_pred_test)
 
         print(orig_acc)
+
+        epochs=16
+        all_features_model = tf.keras.Sequential([
+            tf.keras.layers.Dense(128, activation='relu', input_shape=[X_train.shape[1]]),
+            tf.keras.layers.Dense(64, activation='relu'),
+            tf.keras.layers.Dense(len(np.unique(y))),
+            tf.keras.layers.Activation(tf.nn.softmax)
+        ])
+
+        #print(model.summary())
+
+        all_features_model.compile(optimizer='adam',
+            #loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
+            loss= 'sparse_categorical_crossentropy',
+            metrics=['accuracy'])
+
+        callbacks = [
+            keras.callbacks.ModelCheckpoint(
+                "best_model", save_best_only=True, monitor="val_loss"
+            ),
+            keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss", factor=0.5, patience=20, min_lr=0.0001
+            ),
+            keras.callbacks.EarlyStopping(monitor="val_loss", patience=50, verbose=1),
+        ]
+        
+        history = all_features_model.fit(
+            X_train, y_train, epochs=epochs,
+            callbacks=callbacks,
+            shuffle=False,
+            validation_data=(X_test, y_test),
+            verbose=1
+        )
+
+        all_features_model.fit(X_train, y_train)
+
+
+        #art classifier
+
+        art_classifier = KerasClassifier(model=all_features_model, use_logits=False)
+
+        theta=0.50
+        gamma=0.50
+        attack = SaliencyMapMethod(classifier=art_classifier, theta=theta, gamma=gamma, batch_size=1,verbose=True) # Theta = Small Perturbation , Gamma = 10% of features
+        print("Starting to Generate untargeted JSMA")
+        #x_test_adv = attack.generate(x=X_test, y=y_test)
+        x_test_jsma = attack.generate(x=X_test)
+
+        print("Done!")
+
+        print(x_test_jsma)
+
+        jsma_pred_test = self.predict(x_test_jsma)
+        # View accuracy score
+        print(y_test)
+        print(jsma_pred_test)
+        #print(X_test)
+        jsma_acc = accuracy_score(y_test, jsma_pred_test)
+
+        print("Reference JSMA Accuracy:" + str(jsma_acc))
+        print("Accuracy Difference:" + str(jsma_acc - orig_acc))
         
         reference_score = self.check_features(X,y,threshold)
+        reference_acc = orig_acc
+        reference_jsma_acc = jsma_acc
+        reference_num_features = X_test.shape[1]
+
+        #----------------------------------------------
+        #-------- Now reduce features by threshold ----
+        #----------------------------------------------
 
         X, y = self.drop_features(X,y,threshold)
 
@@ -94,20 +179,79 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
         
         print("Original Feature Score:" + str(reference_score))
         print("New Feature Score     :" + str(new_score))
+        new_num_features = X_test.shape[1]
               
 
-        #art classifier
-        rf_model = RandomForestClassifier(n_estimators=100)
+        epochs=16
+    
+        model = tf.keras.Sequential([
+            tf.keras.layers.Dense(128, activation='relu', input_shape=[X_train.shape[1]]),
+            tf.keras.layers.Dense(64, activation='relu'),
+            tf.keras.layers.Dense(len(np.unique(y))),
+            tf.keras.layers.Activation(tf.nn.softmax)
+        ])
+
+        #print(model.summary())
+
+        model.compile(optimizer='adam',
+            #loss=tf.keras.losses.BinaryCrossentropy(from_logits=True),
+            loss= 'sparse_categorical_crossentropy',
+            metrics=['accuracy'])
+
+        callbacks = [
+            keras.callbacks.ModelCheckpoint(
+                "best_model", save_best_only=True, monitor="val_loss"
+            ),
+            keras.callbacks.ReduceLROnPlateau(
+                monitor="val_loss", factor=0.5, patience=20, min_lr=0.0001
+            ),
+            keras.callbacks.EarlyStopping(monitor="val_loss", patience=50, verbose=1),
+        ]
         
-        #art_classifier = ScikitlearnClassifier(rf_model, use_logits=False)
-        theta=0.1
-        gamma=0.1
-        #attack = SaliencyMapMethod(classifier=art_classifier, theta=theta, gamma=gamma, batch_size=1,verbose=True) # Theta = Small Perturbation , Gamma = 10% of features
+        history = model.fit(
+            X_train, y_train, epochs=epochs,
+            callbacks=callbacks,
+            shuffle=False,
+            validation_data=(X_test, y_test),
+            verbose=1
+        )
+
+        model.fit(X_train,y_train)
+        
+        print("There are " +str(len(X_train)) +" lines in x_train")
+
+        
+        #art classifier
+
+        art_classifier = KerasClassifier(model=model, use_logits=False)
+
+        theta=0.50
+        gamma=0.50
+        attack = SaliencyMapMethod(classifier=art_classifier, theta=theta, gamma=gamma, batch_size=1,verbose=True) # Theta = Small Perturbation , Gamma = 10% of features
         print("Starting to Generate untargeted JSMA")
         #x_test_adv = attack.generate(x=X_test, y=y_test)
-        #x_test_jsma = attack.generate(x=x_test)
+        x_test_jsma = attack.generate(x=X_test)
+
+        print("Done!")
+
+        print(x_test_jsma)
+
+        jsma_pred_test = self.predict(x_test_jsma)
+        # View accuracy score
+        print(y_test)
+        print(jsma_pred_test)
+        #print(X_test)
+        jsma_acc = accuracy_score(y_test, jsma_pred_test)
+        new_jsma_acc = accuracy_score(y_test, jsma_pred_test)
+
+        print("Reference JSMA Acc:" + str(reference_jsma_acc))
+        print("JSMA Accuracy:" + str(new_jsma_acc))
+        print("JSMA Difference:" + str(new_jsma_acc - reference_jsma_acc))
         
-        self.dash_features(reference_score,new_score)
+        self.dash_features(reference_score,new_score,
+                           reference_acc, new_acc,
+                           reference_jsma_acc, new_jsma_acc,
+                           reference_num_features, new_num_features)
         
     def plot_features_range(self, x: np.ndarray, y: np.ndarray) -> float:
         features =[]
@@ -151,7 +295,10 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
 
 
         
-    def dash_features(self,reference_score, feature_score):
+    def dash_features(self,reference_score, feature_score,
+                      reference_acc, new_acc,
+                      reference_jsma_acc, new_jsma_acc,
+                      reference_num_features, new_num_features):
 
         fig = go.Figure(go.Indicator(
             domain = {'x': [0, 1], 'y': [0, 1]},
@@ -166,6 +313,74 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
                      'threshold' : {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': reference_score}}))
         fig.show()
 
+        fig = go.Figure()
+
+        fig.add_trace(go.Indicator(
+            #domain = {'x': [0, 1], 'y': [0, 1]},
+            value = feature_score,
+            mode = "gauge+number+delta",
+            title = {'text': "Feature Score"},
+            delta = {'reference': reference_score},
+            gauge = {'axis': {'range': [None, 100]},
+                     'steps' : [
+                         {'range': [0, 50], 'color': "lightgray"},
+                         {'range': [50, 100], 'color': "gray"}],
+                     'threshold' : {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': reference_score}},
+            domain = {'row': 1, 'column': 0 }
+        ))
+
+        fig.add_trace(go.Indicator(
+            #domain = {'x': [0, 1], 'y': [0, 1]},
+            value = new_acc,
+            mode = "gauge+number+delta",
+            title = {'text': "Accuracy"},
+            delta = {'reference': reference_acc},
+            gauge = {'axis': {'range': [None, 1.00]},
+                     'steps' : [
+                         {'range': [0, 50], 'color': "lightgray"},
+                         {'range': [50, 100], 'color': "gray"}],
+                     'threshold' : {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': reference_acc}},
+            domain = {'row': 1, 'column': 1}
+        ))
+
+        fig.add_trace(go.Indicator(
+            #domain = {'x': [0, 1], 'y': [0, 1]},
+            value = new_jsma_acc,
+            mode = "gauge+number+delta",
+            title = {'text': "Adversarial Accuracy"},
+            delta = {'reference': reference_jsma_acc},
+            gauge = {'axis': {'range': [None, 1.00]},
+                     'steps' : [
+                         {'range': [0, 50], 'color': "lightgray"},
+                         {'range': [50, 100], 'color': "gray"}],
+                     'threshold' : {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': reference_jsma_acc}},
+            domain = {'row': 1, 'column': 2}
+        ))
+
+        fig.add_trace(go.Indicator(
+            #domain = {'x': [0, 1], 'y': [0, 1]},
+            value = new_num_features,
+            mode = "gauge+number+delta",
+            title = {'text': "Num Features"},
+            delta = {'reference': reference_num_features},
+            gauge = {'axis': {'range': [None, reference_num_features]},
+                     'steps' : [
+                         {'range': [0, 50], 'color': "lightgray"},
+                         {'range': [50, 100], 'color': "gray"}],
+                     'threshold' : {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': reference_num_features}},
+            domain = {'row': 1, 'column': 3}
+        ))
+
+        fig.update_layout(
+            grid = {'rows': 2, 'columns': 4, 'pattern': "independent"}
+            #template = {'data' : {'indicator': [{
+            #    'title': {'text': "Speed"},
+            #    'mode' : "number+delta+gauge",
+            #    'delta' : {'reference': 90}}]
+            #}})
+            )
+        
+        fig.show()
 
         
     def drop_features(self,x: np.ndarray, y : np.ndarray, threshold: float) -> tuple[np.ndarray,np.nd.array]:
