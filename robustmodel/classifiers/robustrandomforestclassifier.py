@@ -6,14 +6,21 @@ import copy
 from typing import Any
 
 import numpy as np
+import pandas as pd
+from math import trunc
 from matplotlib import pyplot
 import matplotlib.pyplot as plt
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+
 from ipywidgets import interact, interactive, fixed, interact_manual
 import ipywidgets as widgets
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, confusion_matrix, classification_report
 
+import umap
+import umap.plot
+import cmasher as cmr
 from art.attacks.evasion import FastGradientMethod
 from art.attacks.evasion import SaliencyMapMethod
 
@@ -62,8 +69,7 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
         ]
         self.examine_seperately_items = ["base_estimator", "estimators_"]
 
-    def threshold_slider_moved(self, threshold):
-        #print('wobble ' +str( threshold))
+    def threshold_slider_moved(self, threshold, theta, gamma):
         import numpy as np
         from sklearn import datasets
         
@@ -73,6 +79,8 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
         # Split features and target into train and test sets
         X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=1, stratify=y)
 
+        umap_data_orig = self.plot_cluster_plot(X_test, y_test)
+        
         self.fit(X_train,y_train)
 
         # Make predictions for the test set
@@ -123,8 +131,11 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
 
         art_classifier = KerasClassifier(model=all_features_model, use_logits=False)
 
-        theta=0.50
-        gamma=0.50
+        #theta=0.50
+        print(theta)
+        #gamma=0.50
+        print(gamma)
+
         attack = SaliencyMapMethod(classifier=art_classifier, theta=theta, gamma=gamma, batch_size=1,verbose=True) # Theta = Small Perturbation , Gamma = 10% of features
         print("Starting to Generate untargeted JSMA")
         #x_test_adv = attack.generate(x=X_test, y=y_test)
@@ -144,10 +155,11 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
         print("Reference JSMA Accuracy:" + str(jsma_acc))
         print("Accuracy Difference:" + str(jsma_acc - orig_acc))
         
-        reference_score = self.check_features(X,y,threshold)
+        reference_score, reference_importances = self.check_features(X,y,threshold)
         reference_acc = orig_acc
         reference_jsma_acc = jsma_acc
         reference_num_features = X_test.shape[1]
+
 
         #----------------------------------------------
         #-------- Now reduce features by threshold ----
@@ -171,7 +183,7 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
 
         print(new_acc)
 
-        new_score = self.check_features(X,y,threshold)
+        new_score, new_importances = self.check_features(X,y,threshold)
         #self.plot_features_range(X,y)
 
         print("Original Accuracy: " + str(orig_acc))
@@ -247,11 +259,33 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
         print("Reference JSMA Acc:" + str(reference_jsma_acc))
         print("JSMA Accuracy:" + str(new_jsma_acc))
         print("JSMA Difference:" + str(new_jsma_acc - reference_jsma_acc))
+
+        umap_data_reduced = self.plot_cluster_plot(X_test, y_test)
         
         self.dash_features(reference_score,new_score,
                            reference_acc, new_acc,
                            reference_jsma_acc, new_jsma_acc,
-                           reference_num_features, new_num_features)
+                           reference_num_features, new_num_features,
+                           umap_data_orig, umap_data_reduced,
+                           reference_importances, new_importances)
+
+    def plot_cluster_plot(self, x: np.ndarray, y: np.mdarray) -> DataFrame:
+
+        colors = cmr.take_cmap_colors('tab20', 15, return_fmt='hex')
+        print(colors)
+        #make a dataframe 
+        df = pd.DataFrame(data=np.column_stack((x,y)))
+        print(x)
+        print(y)
+        print(df)
+
+        print("Starting Cluster Plot....")
+        X = pd.DataFrame(umap.UMAP().fit_transform(df.values), columns=['x', 'y'])
+        print(X)
+        plt.scatter(X['x'], X['y'], c=colors[0],cmap='tab20')
+        plt.show()
+        return(X)
+
         
     def plot_features_range(self, x: np.ndarray, y: np.ndarray) -> float:
         features =[]
@@ -290,15 +324,29 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
         #display(threshold_slider)
 
         
-        w = interact_manual(self.threshold_slider_moved, threshold=widgets.FloatSlider(min=0.0,max=1.0,step=.01,value=0.0))
+#        w = interact_manual(self.threshold_slider_moved, threshold=widgets.FloatSlider(min=0.0,max=1.0,step=.01,value=0.0), epsilon=widgets.FloatSlider(min=0.0,max=1.0,step=.01,value=0.0))
+
+        w = interact_manual(self.threshold_slider_moved,
+                            threshold=widgets.FloatSlider(
+                                min=0.0,max=1.0,step=.01,value=0.0),
+                            theta=widgets.FloatSlider(
+                                min=0.0,max=1.0,step=.01,value=0.0),
+                            gamma=widgets.FloatSlider(
+                                min=0.0,max=1.0,step=.01,value=0.0))
         display(w)
 
+
+        #checkboxes
+        #interact_manual(self.threshold_slider_moved, threshold=True)
+        #display(w)
 
         
     def dash_features(self,reference_score, feature_score,
                       reference_acc, new_acc,
                       reference_jsma_acc, new_jsma_acc,
-                      reference_num_features, new_num_features):
+                      reference_num_features, new_num_features,
+                      umap_data_orig, umap_data_reduced,
+                      reference_importances, new_importances):
 
         fig = go.Figure(go.Indicator(
             domain = {'x': [0, 1], 'y': [0, 1]},
@@ -313,8 +361,36 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
                      'threshold' : {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': reference_score}}))
         fig.show()
 
-        fig = go.Figure()
 
+        fig = make_subplots(rows=1, cols=2)
+
+        fig.add_trace(go.Scatter(y=[4, 2, 1], mode="lines"), row=1, col=1)
+        fig.add_trace(go.Bar(y=[2, 1, 3]), row=1, col=2)
+
+        fig.show()
+
+        fig = make_subplots(rows=3, cols=4)
+        #fig = go.Figure()
+
+        fig.add_trace(go.Scatter(
+            x=umap_data_orig['x'],
+            y=umap_data_orig['y'],
+            mode="markers",
+            name="Orginal FeatureSet",
+            
+        ),row=1,col=1)
+
+        fig.add_trace(go.Scatter(
+            x=umap_data_reduced['x'],
+            y=umap_data_reduced['y'],
+            mode="markers",
+            name="Reduced FeatureSet",
+            
+        ),row=2,col=1)
+
+        fig.add_trace(go.Bar(y=reference_importances,name="Reference Importances"), row=1, col=2)
+        fig.add_trace(go.Bar(y=new_importances, name="New Importances"), row=2, col=2)
+        
         fig.add_trace(go.Indicator(
             #domain = {'x': [0, 1], 'y': [0, 1]},
             value = feature_score,
@@ -326,7 +402,7 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
                          {'range': [0, 50], 'color': "lightgray"},
                          {'range': [50, 100], 'color': "gray"}],
                      'threshold' : {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': reference_score}},
-            domain = {'row': 1, 'column': 0 }
+            domain = {'row': 3, 'column': 0 }
         ))
 
         fig.add_trace(go.Indicator(
@@ -340,7 +416,7 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
                          {'range': [0, 50], 'color': "lightgray"},
                          {'range': [50, 100], 'color': "gray"}],
                      'threshold' : {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': reference_acc}},
-            domain = {'row': 1, 'column': 1}
+            domain = {'row': 3, 'column': 1}
         ))
 
         fig.add_trace(go.Indicator(
@@ -354,7 +430,7 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
                          {'range': [0, 50], 'color': "lightgray"},
                          {'range': [50, 100], 'color': "gray"}],
                      'threshold' : {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': reference_jsma_acc}},
-            domain = {'row': 1, 'column': 2}
+            domain = {'row': 3, 'column': 2}
         ))
 
         fig.add_trace(go.Indicator(
@@ -368,11 +444,11 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
                          {'range': [0, 50], 'color': "lightgray"},
                          {'range': [50, 100], 'color': "gray"}],
                      'threshold' : {'line': {'color': "red", 'width': 4}, 'thickness': 0.75, 'value': reference_num_features}},
-            domain = {'row': 1, 'column': 3}
+            domain = {'row': 3, 'column': 3}
         ))
 
         fig.update_layout(
-            grid = {'rows': 2, 'columns': 4, 'pattern': "independent"}
+            grid = {'rows': 4, 'columns': 4, 'pattern': "independent"}
             #template = {'data' : {'indicator': [{
             #    'title': {'text': "Speed"},
             #    'mode' : "number+delta+gauge",
@@ -416,7 +492,7 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
  
         
         
-    def check_features(self, x: np.ndarray, y: np.ndarray, threshold: float) -> float:
+    def check_features(self, x: np.ndarray, y: np.ndarray, threshold: float) -> tuple[new_metric,importances]:
         #print("Shape of X is {}".format(x.shape))
         num_features = x.shape[1]
         #print(num_features)
@@ -426,11 +502,11 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
             pass
 
         # get importance
-        importance = self.feature_importances_
+        importances = self.feature_importances_
         # summarize feature importance
         num_important_features = 0
         cumulative_score = 0
-        for i,v in enumerate(importance):
+        for i,v in enumerate(importances):
             cumulative_score = cumulative_score + v
             #print('Feature: %0d, Score: %.5f' % (i,v))
             if v > threshold:
@@ -441,16 +517,57 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
         feature_score = num_important_features / num_features * 100
         average_score = cumulative_score / num_features * 100
 
+        # Find Inter-Quartile Range
+
+        std = np.std([tree.feature_importances_ for tree in self.estimators_],
+                     axis=0)
+        increasing_indices = np.argsort(importances)
+        decreasing_indices = np.argsort(importances)[::-1]
+        print(increasing_indices)
+
+        median_index = trunc(len(increasing_indices)*0.5)
+
+        q1_index = trunc(len(increasing_indices)*0.25)
+        if(round(len(increasing_indices)*0.75) >= len(increasing_indices)):
+            q3_index = trunc(len(increasing_indices)*0.75)
+        else:
+            q3_index = round(len(increasing_indices)*0.75)
+
+        print("q3_index:" + str(q3_index))
+
+        print(increasing_indices)
+        q1 = importances[increasing_indices[q1_index]]
+        print("Q1    :" + str(q1))
+        
+        median = importances[increasing_indices[median_index]]
+        print("Median:" + str(median))        
+
+        q3 = importances[increasing_indices[q3_index]]
+        print("Q3    :" + str(q3))
+
+        iqr = q3-q1
+
+        print("IQR   :" +str(iqr))
+
+        for i in range(0,len(importances)):
+            print(importances[increasing_indices[i]])
+        
+        
         #print('Feature Score ' + str(feature_score))        
         
         # plot feature importance
-        plt.xticks(range(0,len(importance)), rotation=90, fontsize=15)
-        pyplot.bar([x for x in range(len(importance))], importance)
+        plt.xticks(range(0,len(importances)), rotation=90, fontsize=15)
+        pyplot.bar([x for x in range(len(importances))], importances)
         pyplot.show()
 
 
         #print(average_score)
-        return average_score
+        #return average_score
+
+        new_metric = ((iqr * 100) + (average_score * 100) / 200)
+        return new_metric, importances
+        #return(iqr * 100)
+
 
         
         
