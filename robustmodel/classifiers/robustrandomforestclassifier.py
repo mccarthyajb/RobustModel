@@ -160,6 +160,8 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
         reference_jsma_acc = jsma_acc
         reference_num_features = X_test.shape[1]
 
+        ref_y1, ref_y2, ref_y3 = self.plot_features_range(X,y)
+
 
         #----------------------------------------------
         #-------- Now reduce features by threshold ----
@@ -184,7 +186,7 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
         print(new_acc)
 
         new_score, new_importances = self.check_features(X,y,threshold)
-        #self.plot_features_range(X,y)
+        new_y1, new_y2, new_y3 = self.plot_features_range(X,y)
 
         print("Original Accuracy: " + str(orig_acc))
         print("New Accuracy     : " + str(new_acc))
@@ -267,7 +269,9 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
                            reference_jsma_acc, new_jsma_acc,
                            reference_num_features, new_num_features,
                            umap_data_orig, umap_data_reduced,
-                           reference_importances, new_importances)
+                           reference_importances, new_importances,
+                           ref_y1, ref_y2, ref_y3,
+                           new_y1, new_y2, new_y3)
 
     def plot_cluster_plot(self, x: np.ndarray, y: np.mdarray) -> DataFrame:
 
@@ -287,7 +291,7 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
         return(X)
 
         
-    def plot_features_range(self, x: np.ndarray, y: np.ndarray) -> float:
+    def plot_features_range(self, x: np.ndarray, y: np.ndarray) -> Tuple[y1, y2, y3]:
         features =[]
         min_values = []
         max_values = []
@@ -318,6 +322,8 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
         plt.xticks(range(0,len(y1)), rotation=90, fontsize=15)
         plt.ylim(min_y_limit,max_y_limit)
         plt.show()
+
+        return y1, y2, y3
                    
     def dashboard(self):
         #        threshold_slider = widgets.FloatSlider()
@@ -346,7 +352,9 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
                       reference_jsma_acc, new_jsma_acc,
                       reference_num_features, new_num_features,
                       umap_data_orig, umap_data_reduced,
-                      reference_importances, new_importances):
+                      reference_importances, new_importances,
+                      reference_y1, reference_y2, reference_y3,
+                      new_y1, new_y2, new_y3):
 
         fig = go.Figure(go.Indicator(
             domain = {'x': [0, 1], 'y': [0, 1]},
@@ -390,6 +398,17 @@ class RobustRandomForestClassifier(RobustModel, RandomForestClassifier):
 
         fig.add_trace(go.Bar(y=reference_importances,name="Reference Importances"), row=1, col=2)
         fig.add_trace(go.Bar(y=new_importances, name="New Importances"), row=2, col=2)
+
+        fig.add_trace(go.Scatter(y=reference_y1, mode="lines", name="ref_min"),
+        row=1, col=3)
+        fig.add_trace(go.Scatter(y=reference_y2, mode="lines", name="ref_max"),
+        row=1, col=3)
+        fig.add_trace(go.Scatter(y=reference_y3, mode="lines", name="ref_median"),
+        row=1, col=3)
+
+        fig.add_trace(go.Scatter(y=new_y1, mode="lines", name="new_min"), row=2, col=3)
+        fig.add_trace(go.Scatter(y=new_y2, mode="lines", name="new_max"), row=2, col=3)
+        fig.add_trace(go.Scatter(y=new_y3, mode="lines", name="new_median"), row=2, col=3)
         
         fig.add_trace(go.Indicator(
             #domain = {'x': [0, 1], 'y': [0, 1]},
